@@ -1,6 +1,20 @@
 {
-    "version": "",
-    "thumbnail": "",
-    "id": "",
-    "name": ""
+    "name": "Mi WalkingPad",
+    "version": "0.1.0",
+    "app-version": "1.5.0-beta.6",
+    "minimum-app-version": "1.5.0",
+    "id": "com_behesse_miwalkingpad",
+    "github": "https://github.com/behesse/streamcontroller-miwalkingpad",
+    "thumbnail": "assets/info.png",
+    "descriptions": {
+        "en_US": "Control your WalkingPad from StreamController with Start, Stop and speed step actions."
+    },
+    "short-descriptions": {
+        "en_US": "WalkingPad controls"
+    },
+    "tags": [
+        "WalkingPad",
+        "Fitness",
+        "IoT"
+    ]
 }
