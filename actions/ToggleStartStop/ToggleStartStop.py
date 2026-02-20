@@ -1,41 +1,49 @@
 from __future__ import annotations
 
-import os
 from loguru import logger as log
 
-from src.backend.PluginManager.ActionBase import ActionBase
+from .._base.WalkingPadActionBase import WalkingPadActionBase
 
 
-class ToggleStartStop(ActionBase):
-    METRIC_RUNTIME = 0
-    METRIC_STEPS = 1
-    METRIC_DISTANCE = 2
+class ToggleStartStop(WalkingPadActionBase):
+    METRICS = ("time", "steps", "distance")
+    METRIC_TIME = "time"
+    METRIC_STEPS = "steps"
+    METRIC_DISTANCE = "distance"
+    ROTATION_EVERY_TICKS = 3
+    OFFLINE_ICON = "offline"
+    STOPPED_ICON = "main"
+    RUNNING_ICON = "pause"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._metric_index = self.METRIC_RUNTIME
+        self._metric_index = 0
         self._tick_counter = 0
-        self._rotation_every_ticks = 3
 
     def on_ready(self) -> None:
-        icon_path = os.path.join(self.plugin_base.PATH, "assets", "treadmill-offline.svg")
-        self.set_media(media_path=icon_path, size=0.75)
+        self.set_icon(self.OFFLINE_ICON)
         self._refresh_from_status(rotate_metric=False)
 
     def on_tick(self) -> None:
         self._tick_counter += 1
-        rotate_metric = self._tick_counter % self._rotation_every_ticks == 0
+        rotate_metric = self._tick_counter % self.ROTATION_EVERY_TICKS == 0
         self._refresh_from_status(rotate_metric=rotate_metric)
 
     def on_key_down(self) -> None:
         try:
-            status = self.plugin_base.backend.get_status()
+            backend = self.get_backend()
+            if backend is None:
+                self.show_error()
+                self._render_offline()
+                return
+
+            status = backend.get_status()
             is_running = bool(status.get("running", False))
 
             if is_running:
-                result = self.plugin_base.backend.stop_belt()
+                result = backend.stop_belt()
             else:
-                result = self.plugin_base.backend.start_belt()
+                result = backend.start_belt()
 
             if not result.get("ok", False):
                 self.show_error()
@@ -46,24 +54,32 @@ class ToggleStartStop(ActionBase):
             self.show_error()
 
     def _refresh_from_status(self, rotate_metric: bool) -> None:
-        try:
-            status = self.plugin_base.backend.get_status()
-            connected = bool(status.get("connected", False))
-            running = bool(status.get("running", False))
+        status = self.get_backend_status()
+        if status is None:
+            self._render_offline()
+            return
 
-            if connected:
-                self._sync_visual_state(running)
-                if running:
-                    self._update_metric_labels(status=status, rotate_metric=rotate_metric)
-                else:
-                    self.set_top_label("")
-                    self.set_bottom_label("")
-            else:
-                self.set_media(media_path=os.path.join(self.plugin_base.PATH, "assets", "treadmill-offline.svg"), size=0.75)
-                self.set_top_label("")
-                self.set_bottom_label("")
-        except Exception as exc:  # noqa: BLE001
-            log.error(exc)
+        connected = bool(status.get("connected", False))
+        running = bool(status.get("running", False))
+
+        if not connected:
+            self._render_offline()
+            return
+
+        self._sync_visual_state(running)
+
+        if not running:
+            self._render_stopped()
+            return
+
+        self._update_metric_labels(status=status, rotate_metric=rotate_metric)
+
+    def _render_offline(self) -> None:
+        self.set_icon(self.OFFLINE_ICON)
+        self.clear_labels()
+
+    def _render_stopped(self) -> None:
+        self.clear_labels()
 
     def _sync_visual_state(self, running: bool) -> None:
         # This action is expected to be present in two key states:
@@ -78,23 +94,24 @@ class ToggleStartStop(ActionBase):
             # UI state switching failure should never block control.
             pass
 
-        icon_name = "pause.svg" if running else "treadmill.svg"
-        icon_path = os.path.join(self.plugin_base.PATH, "assets", icon_name)
-        self.set_media(media_path=icon_path, size=0.75)
+        self.set_icon(self.RUNNING_ICON if running else self.STOPPED_ICON)
         self.set_center_label("")
 
     def _update_metric_labels(self, status: dict, rotate_metric: bool) -> None:
         if rotate_metric:
-            self._metric_index = (self._metric_index + 1) % 3
+            self._metric_index = (self._metric_index + 1) % len(self.METRICS)
 
-        if self._metric_index == self.METRIC_RUNTIME:
+        metric = self.METRICS[self._metric_index]
+
+        if metric == self.METRIC_TIME:
             runtime_seconds = int(status.get("runtime_seconds", 0))
-            mins, secs = divmod(max(0, runtime_seconds), 60)
+            total_minutes = max(0, runtime_seconds) // 60
+            hours, minutes = divmod(total_minutes, 60)
             self.set_top_label("Time")
-            self.set_bottom_label(f"{mins:02d}:{secs:02d}")
+            self.set_bottom_label(f"{hours:02d}:{minutes:02d}")
             return
 
-        if self._metric_index == self.METRIC_STEPS:
+        if metric == self.METRIC_STEPS:
             steps = int(status.get("steps", 0))
             self.set_top_label("Steps")
             self.set_bottom_label(f"{steps}")
