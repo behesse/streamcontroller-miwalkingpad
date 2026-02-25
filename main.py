@@ -85,8 +85,7 @@ class MiWalkingPadPlugin(PluginBase):
         self._sync_backend_config()
 
     def get_selector_icon(self) -> Gtk.Widget:
-        _, rendered = self.asset_manager.icons.get_asset_values("main")
-        return Gtk.Image.new_from_pixbuf(image2pixbuf(rendered))
+        return Gtk.Image.new_from_file(self.get_asset_path("icon.png"))
 
     def _add_icons(self) -> None:
         self.add_icon("main", self.get_asset_path("treadmill.svg"))

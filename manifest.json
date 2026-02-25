@@ -5,7 +5,7 @@
     "minimum-app-version": "1.5.0",
     "id": "com_behesse_miwalkingpad",
     "github": "https://github.com/behesse/streamcontroller-miwalkingpad",
-    "thumbnail": "assets/treadmill.svg",
+    "thumbnail": "assets/thumbnail.png",
     "descriptions": {
         "en_US": "Control your WalkingPad from StreamController with Start, Stop and speed step actions."
     },
