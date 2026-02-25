@@ -9,6 +9,7 @@ from loguru import logger as log
 from streamcontroller_plugin_tools import BackendBase
 
 from miwalkingpad import AsyncWalkingPadService, WalkingPadAdapter
+from miwalkingpad.discovery import discover_handshake
 
 try:
     from .service_compat import patch_async_service
@@ -39,6 +40,7 @@ class WalkingPadBackend(BackendBase):
         self._config_lock = threading.Lock()
         self._ip = ""
         self._token = ""
+        self._device_id = ""
 
         self._status_cache = BackendStatusCache()
 
@@ -102,18 +104,54 @@ class WalkingPadBackend(BackendBase):
         if distance_m is not None:
             self._status_cache.distance_km = max(0.0, float(distance_m) / 1000.0)
 
-    def _read_config(self) -> tuple[str, str]:
+    def _read_config(self) -> tuple[str, str, str]:
         with self._config_lock:
-            return self._ip, self._token
+            return self._ip, self._token, self._device_id
+
+    def _resolve_ip_from_discovery(self, device_id: str) -> str | None:
+        try:
+            found = discover_handshake(timeout=max(1, int(self.RETRY_SECONDS)), token=None)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(f"WalkingPad discovery failed: {exc}")
+            return None
+
+        wanted = (device_id or "").strip().lower()
+        if not wanted:
+            return None
+
+        for entry in found:
+            entry_device_id = str(getattr(entry, "device_id", "") or "").strip().lower()
+            entry_ip = str(getattr(entry, "ip", "") or "").strip()
+            if entry_device_id == wanted and entry_ip:
+                return entry_ip
+        return None
 
     async def _connection_worker(self) -> None:
         active_cfg: tuple[str, str] | None = None
 
         while not self._stop_event.is_set():
-            ip, token = self._read_config()
-            cfg = (ip, token)
+            configured_ip, token, device_id = self._read_config()
 
-            if not ip or not token:
+            token_value = (token or "").strip()
+            if not token_value:
+                self._service = None
+                self._set_disconnected("missing_config")
+                await asyncio.sleep(self.RETRY_SECONDS)
+                continue
+
+            resolved_ip = configured_ip
+            if not resolved_ip and device_id:
+                discovered_ip = self._resolve_ip_from_discovery(device_id)
+                if discovered_ip is None:
+                    self._service = None
+                    self._set_disconnected("device_not_found")
+                    await asyncio.sleep(self.RETRY_SECONDS)
+                    continue
+                resolved_ip = discovered_ip
+
+            cfg = (resolved_ip, token_value)
+
+            if not resolved_ip:
                 self._service = None
                 self._set_disconnected("missing_config")
                 await asyncio.sleep(self.RETRY_SECONDS)
@@ -121,7 +159,7 @@ class WalkingPadBackend(BackendBase):
 
             if active_cfg != cfg or self._service is None:
                 try:
-                    adapter = WalkingPadAdapter(ip=ip, token=token, model=self.MODEL)
+                    adapter = WalkingPadAdapter(ip=resolved_ip, token=token_value, model=self.MODEL)
                     service = AsyncWalkingPadService(adapter=adapter)
                     patch_async_service(service)
                     status = await self._get_status_safe(service)
@@ -194,15 +232,47 @@ class WalkingPadBackend(BackendBase):
     def _clamp(speed: float, min_value: float, max_value: float) -> float:
         return max(min_value, min(max_value, speed))
 
-    def configure(self, ip: str, token: str) -> dict:
+    def configure(self, ip: str, token: str, device_id: str = "") -> dict:
         with self._config_lock:
             self._ip = (ip or "").strip()
             self._token = (token or "").strip()
+            self._device_id = (device_id or "").strip()
 
         # Force reconnect on updated credentials.
         self._service = None
         self._status_cache.connected = False
         return self.get_status()
+
+    def discover_devices(self, token: str, timeout: int = 5) -> dict:
+        token_value = (token or "").strip()
+        if not token_value:
+            return {"ok": False, "error": "token_required", "devices": []}
+
+        try:
+            found = discover_handshake(timeout=max(1, int(timeout)), token=token_value)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc), "devices": []}
+
+        devices: list[dict] = []
+        for entry in found:
+            info = getattr(entry, "info", None) or {}
+            model = str(info.get("model", "") or "")
+            is_walkingpad = "walkingpad" in model.lower()
+            if not is_walkingpad:
+                continue
+
+            devices.append(
+                {
+                    "ip": str(getattr(entry, "ip", "") or ""),
+                    "device_id": str(getattr(entry, "device_id", "") or ""),
+                    "token": str(getattr(entry, "token", "") or ""),
+                    "auth_ok": bool(getattr(entry, "auth_ok", False)),
+                    "auth_error": getattr(entry, "auth_error", None),
+                    "model": model,
+                }
+            )
+
+        return {"ok": True, "devices": devices}
 
     async def _start_belt_async(self) -> dict:
         await self._require_connected()
